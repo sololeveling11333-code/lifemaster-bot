@@ -1289,9 +1289,9 @@ async def cancel_conv(update, context):
 # ════════════════════════════════════════════════════════════
 def main():
     if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN غير محدد!"); return
+        logger.error("❌ BOT_TOKEN غير محدد!")
+        return
 
-    asyncio.set_event_loop(asyncio.new_event_loop())
     app = Application.builder().token(BOT_TOKEN).build()
 
     fallbacks = [
@@ -1302,12 +1302,13 @@ def main():
 
     def conv(entry_patterns, states, extra_fallbacks=None):
         return ConversationHandler(
-            entry_points=[CallbackQueryHandler(ep, pattern=p) for p,ep in entry_patterns],
+            entry_points=[CallbackQueryHandler(ep, pattern=p) for p, ep in entry_patterns],
             states=states,
             fallbacks=fallbacks + (extra_fallbacks or []),
             per_user=True, per_chat=True,
         )
 
+    # تجهيز المسارات
     task_conv = conv(
         [("^task_add$", add_task_start)],
         {TASK_TITLE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, task_got_title)],
@@ -1337,10 +1338,9 @@ def main():
          GOAL_UNIT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_got_unit)],
          GOAL_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_got_deadline)]},
     )
-    goal_update_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(cb_router, pattern="^update_goal_")],
-        states={GOAL_UPDATE_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_update_value)]},
-        fallbacks=fallbacks, per_user=True, per_chat=True,
+    goal_update_conv = conv(
+        [("^update_goal_", goal_update_start)],
+        {GOAL_UPDATE_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_update_value)]}
     )
     challenge_conv = conv(
         [("^challenge_add$", add_challenge_start)],
@@ -1352,28 +1352,32 @@ def main():
         [("^friend_add$", add_friend_start)],
         {FRIEND_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, friend_id_received)]},
     )
-    ai_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(cb_router, pattern="^ai_free$")],
-        states={AI_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ai_free_chat)]},
-        fallbacks=fallbacks, per_user=True, per_chat=True,
+    ai_conv = conv(
+        [("^ai_free$", ai_free_start)],
+        {AI_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ai_free_chat)]}
     )
 
+    # تسجيل الأوامر
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("menu",    cmd_menu))
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("backup",  cmd_backup))
+    
     for h in [task_conv, edit_task_conv, habit_conv, goal_conv,
               goal_update_conv, challenge_conv, friend_conv, ai_conv]:
         app.add_handler(h)
+        
     app.add_handler(CallbackQueryHandler(cb_router))
 
+    # التنبيهات التلقائية
     jq = app.job_queue
-    jq.run_daily(job_midnight,      time=time(21, 0, 0))  # 00:00 KSA
-    jq.run_daily(job_morning,       time=time(9,  0, 0))  # 12:00 KSA
-    jq.run_daily(job_weekly_bonus,  time=time(20, 0, 0),  days=(6,))  # Sunday 23:00 KSA
+    if jq:
+        jq.run_daily(job_midnight,      time=time(21, 0, 0))
+        jq.run_daily(job_morning,       time=time(9,  0, 0))
+        jq.run_daily(job_weekly_bonus,  time=time(20, 0, 0), days=(6,))
 
-    logger.info("🚀 LifeMaster AI — كامل ويعمل!")
-    app.run_polling(drop_pending_updates=True, stop_signals=None)
+    logger.info("🚀 البوت شغال الآن بنجاح!")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
