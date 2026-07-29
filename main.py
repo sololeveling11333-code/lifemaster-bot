@@ -4,7 +4,6 @@ LifeMaster AI — Telegram Bot (Full)
 """
 import os
 import logging
-import asyncio
 import io
 from flask import Flask
 from threading import Thread
@@ -264,10 +263,6 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Goals ────────────────────────────────────────────────
     elif d.startswith("view_goal_"):
         await _goal_detail(update, uid, d[len("view_goal_"):])
-    elif d.startswith("update_goal_"):
-        context.user_data["updating_goal"] = d[len("update_goal_"):]
-        await q.edit_message_text("📝 كم وصلت؟ اكتب الرقم الجديد (مثال: 45):")
-        return GOAL_UPDATE_VALUE
     elif d.startswith("del_goal_"):
         delete_goal(d[len("del_goal_"):]); await _goals_menu(update, uid)
 
@@ -329,12 +324,6 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = ask_coach(prompt, user)
         await q.edit_message_text(f"🔍 *تحليل نقاط ضعفك*\n\n{msg}", parse_mode="Markdown",
                                    reply_markup=back_keyboard("menu_ai"))
-    elif d == "ai_free":
-        context.user_data["ai_mode"] = True
-        await q.edit_message_text("🤖 *المدرب الذكي*\n\nاكتب سؤالك:\n\n_/menu للخروج_",
-                                   parse_mode="Markdown")
-        return AI_CHAT
-
     # ── Community ────────────────────────────────────────────
     elif d == "comm_challenges":   await _challenges_page(update, uid)
     elif d == "comm_leaderboard":  await _leaderboard(update, uid)
