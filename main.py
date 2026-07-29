@@ -1303,6 +1303,17 @@ async def cancel_conv(update, context):
 #  MAIN
 # ════════════════════════════════════════════════════════════
 def main():
+    import asyncio
+
+    # Python 3.12+ لا ينشئ event loop تلقائياً — ننشئه يدوياً
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     if not BOT_TOKEN:
         logger.error("❌ BOT_TOKEN غير محدد! أضفه في Environment Variables")
         return
