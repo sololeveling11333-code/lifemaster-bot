@@ -1158,6 +1158,16 @@ async def _ai_menu(update, user):
     ])
     await _edit(update, txt, kb)
 
+async def ai_free_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    context.user_data["ai_mode"] = True
+    await q.edit_message_text(
+        "🤖 *المدرب الذكي*\n\nاكتب سؤالك:\n\n_/menu للخروج_",
+        parse_mode="Markdown"
+    )
+    return AI_CHAT
+
 async def ai_free_chat(update, context):
     uid  = update.effective_user.id; user = get_user(uid)
     await update.message.reply_text("⏳ جاري التفكير...")
