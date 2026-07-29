@@ -807,6 +807,14 @@ async def _goal_detail(update, uid, goal_id):
     await update.callback_query.edit_message_text(txt, parse_mode="Markdown",
                                                    reply_markup=InlineKeyboardMarkup(rows))
 
+async def goal_update_start(update, context):
+    q   = update.callback_query
+    await q.answer()
+    goal_id = q.data[len("update_goal_"):]
+    context.user_data["updating_goal"] = goal_id
+    await q.edit_message_text("📝 كم وصلت؟ اكتب الرقم الجديد (مثال: 45):")
+    return GOAL_UPDATE_VALUE
+
 async def goal_update_value(update, context):
     uid   = update.effective_user.id
     gid   = context.user_data.get("updating_goal","")
