@@ -2,6 +2,10 @@
 LifeMaster AI — Telegram Bot (Full)
 مهام · عادات · أهداف · XP · متجر · تحليلات · تقويم · تحديات · ذكاء اصطناعي
 """
+import os
+import logging
+import asyncio
+import io
 from flask import Flask
 from threading import Thread
 
@@ -17,7 +21,6 @@ def run():
 
 Thread(target=run).start()
 
-import os, logging, asyncio, io
 from datetime import datetime, time, date, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
