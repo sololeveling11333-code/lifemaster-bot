@@ -63,9 +63,17 @@ from modules.challenges import (
 )
 from modules.backup import export_as_json_bytes, build_text_report
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-logger =  logging.getLogger(__name__)
+import sys
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    stream=sys.stdout,
+    force=True,
+)
+logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+MONGO_URI = os.environ.get("MONGO_URI", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 # ── Conversation states ──────────────────────────────────────
 (
@@ -1278,8 +1286,21 @@ async def cancel_conv(update, context):
 # ════════════════════════════════════════════════════════════
 def main():
     if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN غير محدد!")
+        logger.error("❌ BOT_TOKEN غير محدد! أضفه في Environment Variables")
         return
+    if not MONGO_URI:
+        logger.error("❌ MONGO_URI غير محدد! أضفه في Environment Variables")
+        return
+
+    logger.info("🔄 جاري تهيئة البوت...")
+
+    # حذف أي webhook قديم قد يمنع الـ polling
+    import requests as _req
+    try:
+        r = _req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+        logger.info(f"🔗 deleteWebhook: {r.json().get('description','ok')}")
+    except Exception as e:
+        logger.warning(f"⚠️ تعذّر حذف الـ webhook: {e}")
 
     app = Application.builder().token(BOT_TOKEN).build()
 

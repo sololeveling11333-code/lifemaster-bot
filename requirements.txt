@@ -4,5 +4,6 @@ dnspython
 flask
 groq
 pytz
+requests
 telegram
 telegram
