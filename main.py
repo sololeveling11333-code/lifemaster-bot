@@ -47,8 +47,8 @@ from modules.challenges import (
 from modules.backup import export_as_json_bytes, build_text_report
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-logger = logging.getLogger(__name__)
-BOT_TOKEN = os.environ.get("8887533227:AAGO0MrwjFMvfoMCEHg69RyDwpaHj97_nww", "")
+logger =  logging.getLogger(__name__)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 # ── Conversation states ──────────────────────────────────────
 (
