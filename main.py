@@ -62,6 +62,10 @@ from modules.challenges import (
     send_friend_request, get_pending_requests, accept_friend, get_friends,
 )
 from modules.backup import export_as_json_bytes, build_text_report
+from modules.database import (
+    create_reminder, get_due_reminders, mark_reminder_fired,
+    get_user_reminders, delete_user_reminders,
+)
 
 import sys
 logging.basicConfig(
@@ -85,7 +89,8 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
     FRIEND_ID,
     AI_CHAT,
     EDIT_TASK_FIELD, EDIT_TASK_VALUE,
-) = range(19)
+    REMINDER_TIME, SET_MORNING_TIME, SET_EVENING_TIME,
+) = range(22)
 
 _tmp: dict = {}   # per-user temp data during conversations
 
@@ -347,6 +352,10 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _friends_page(update, uid)
 
     # ── Settings ─────────────────────────────────────────────
+    elif d.startswith("remind_task_"):
+        return await remind_task_start(update, context)
+    elif d == "my_reminders":
+        await my_reminders_page(update, uid)
     elif d == "toggle_notif":
         s = user.get("settings", {})
         s["notifications"] = not s.get("notifications", True)
@@ -448,6 +457,7 @@ async def _task_detail(update, task_id):
     rows = []
     if task["status"] == "pending":
         rows.append([InlineKeyboardButton("✅ أنجزت", callback_data=f"done_task_{task_id}")])
+        rows.append([InlineKeyboardButton("⏰ ذكّرني", callback_data=f"remind_task_{task_id}")])
     rows.append([
         InlineKeyboardButton("✏️ تعديل",  callback_data=f"edit_task_{task_id}"),
         InlineKeyboardButton("🗑️ حذف",   callback_data=f"del_task_{task_id}"),
@@ -1193,6 +1203,91 @@ async def _achievements_page(update, uid):
 
 
 # ════════════════════════════════════════════════════════════
+#  REMINDERS
+# ════════════════════════════════════════════════════════════
+async def remind_task_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    task_id = q.data[len("remind_task_"):]
+    task = get_task_by_id(task_id)
+    if not task:
+        await q.answer("المهمة غير موجودة!", show_alert=True); return ConversationHandler.END
+    context.user_data["remind_task_id"]    = task_id
+    context.user_data["remind_task_title"] = task["title"]
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏰ بعد 30 دقيقة", callback_data="rtime_30m"),
+         InlineKeyboardButton("⏰ بعد ساعة",      callback_data="rtime_1h")],
+        [InlineKeyboardButton("⏰ بعد ساعتين",    callback_data="rtime_2h"),
+         InlineKeyboardButton("⏰ بعد 3 ساعات",   callback_data="rtime_3h")],
+        [InlineKeyboardButton("✏️ وقت مخصص",      callback_data="rtime_custom")],
+        [InlineKeyboardButton("❌ إلغاء",          callback_data="cancel")],
+    ])
+    await q.edit_message_text(
+        f"⏰ *تذكير للمهمة:*\n_{task['title']}_\n\nاختر متى تريد التذكير:",
+        parse_mode="Markdown", reply_markup=kb
+    )
+    return REMINDER_TIME
+
+async def remind_task_quick(update, context):
+    q = update.callback_query; await q.answer()
+    from datetime import timedelta
+    deltas = {"rtime_30m": 30, "rtime_1h": 60, "rtime_2h": 120, "rtime_3h": 180}
+    minutes = deltas.get(q.data, 60)
+    fire_at = datetime.utcnow() + timedelta(minutes=minutes)
+    uid = update.effective_user.id
+    create_reminder(uid, context.user_data["remind_task_id"],
+                    context.user_data["remind_task_title"], fire_at)
+    import pytz
+    local = fire_at + timedelta(hours=3)  # GMT+3
+    await q.edit_message_text(
+        f"✅ تم ضبط التذكير!\n\n⏰ سيصلك الساعة *{local.strftime('%H:%M')}*",
+        parse_mode="Markdown", reply_markup=back_keyboard("task_today")
+    )
+    return ConversationHandler.END
+
+async def remind_task_custom(update, context):
+    q = update.callback_query; await q.answer()
+    await q.edit_message_text(
+        "✏️ اكتب الوقت بصيغة *HH:MM* (مثال: 14:30)\n\n_التوقيت GMT+3_",
+        parse_mode="Markdown"
+    )
+    return REMINDER_TIME
+
+async def remind_task_time_text(update, context):
+    uid = update.effective_user.id
+    text = update.message.text.strip()
+    try:
+        h, m = map(int, text.split(":"))
+        if not (0 <= h <= 23 and 0 <= m <= 59): raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ صيغة خاطئة، اكتب مثل: 14:30"); return REMINDER_TIME
+    from datetime import timedelta
+    now_local = datetime.utcnow() + timedelta(hours=3)
+    fire_local = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
+    if fire_local <= now_local:
+        fire_local += timedelta(days=1)
+    fire_utc = fire_local - timedelta(hours=3)
+    create_reminder(uid, context.user_data["remind_task_id"],
+                    context.user_data["remind_task_title"], fire_utc)
+    await update.message.reply_text(
+        f"✅ تم ضبط التذكير!\n\n⏰ سيصلك الساعة *{fire_local.strftime('%H:%M')}*",
+        parse_mode="Markdown", reply_markup=main_menu_keyboard()
+    )
+    return ConversationHandler.END
+
+async def my_reminders_page(update, uid):
+    reminders = get_user_reminders(uid)
+    from datetime import timedelta
+    if not reminders:
+        await _edit(update, "⏰ *تذكيراتي*\n\nلا توجد تذكيرات نشطة.", back_keyboard("menu_settings"))
+        return
+    txt = "⏰ *تذكيراتي النشطة*\n\n"
+    for r in reminders[:10]:
+        local = r["fire_at"] + timedelta(hours=3)
+        txt += f"• {r['task_title'][:30]} — *{local.strftime('%H:%M')} غداً/اليوم*\n"
+    await _edit(update, txt, back_keyboard("menu_settings"))
+
+# ════════════════════════════════════════════════════════════
 #  SETTINGS
 # ════════════════════════════════════════════════════════════
 async def _settings_page(update, user):
@@ -1200,24 +1295,81 @@ async def _settings_page(update, user):
     n      = "✅" if s.get("notifications",True)   else "❌"
     r      = "✅" if s.get("midnight_report",True)  else "❌"
     st     = "✅" if s.get("strict_mode",False)     else "❌"
+    mt     = s.get("morning_time", "09:00")
+    et     = s.get("evening_time", "21:00")
     txt    = (f"⚙️ *الإعدادات*\n\n"
-              f"🔔 التنبيهات: {n}\n"
-              f"🌙 التقرير الليلي: {r}\n"
+              f"🔔 التنبيهات الصباحية: {n}  _(الساعة {mt})_\n"
+              f"🌙 التقرير الليلي: {r}  _(الساعة {et})_\n"
               f"⚔️ الوضع الصارم (خسارة السلسلة): {st}\n")
     kb     = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🔔 التنبيهات: {n}",          callback_data="toggle_notif")],
-        [InlineKeyboardButton(f"🌙 التقرير الليلي: {r}",      callback_data="toggle_report")],
-        [InlineKeyboardButton(f"⚔️ الوضع الصارم: {st}",      callback_data="toggle_strict")],
-        [InlineKeyboardButton("📦 نسخة احتياطية JSON",        callback_data="backup_json")],
-        [InlineKeyboardButton("📋 تقرير نصي",                 callback_data="backup_report")],
-        [InlineKeyboardButton("🔙 القائمة الرئيسية",          callback_data="back_main")],
+        [InlineKeyboardButton(f"🔔 التنبيهات: {n}",           callback_data="toggle_notif")],
+        [InlineKeyboardButton(f"☀️ وقت الصباح: {mt}",         callback_data="set_morning_time")],
+        [InlineKeyboardButton(f"🌙 التقرير الليلي: {r}",       callback_data="toggle_report")],
+        [InlineKeyboardButton(f"🌆 وقت المساء: {et}",          callback_data="set_evening_time")],
+        [InlineKeyboardButton(f"⚔️ الوضع الصارم: {st}",       callback_data="toggle_strict")],
+        [InlineKeyboardButton("⏰ تذكيراتي",                   callback_data="my_reminders")],
+        [InlineKeyboardButton("📦 نسخة احتياطية JSON",         callback_data="backup_json")],
+        [InlineKeyboardButton("📋 تقرير نصي",                  callback_data="backup_report")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية",           callback_data="back_main")],
     ])
     await _edit(update, txt, kb)
+
+async def set_morning_time_start(update, context):
+    q = update.callback_query; await q.answer()
+    context.user_data["setting_time_type"] = "morning"
+    await q.edit_message_text(
+        "☀️ اكتب وقت التنبيه الصباحي بصيغة *HH:MM*\nمثال: 08:00",
+        parse_mode="Markdown"
+    )
+    return SET_MORNING_TIME
+
+async def set_evening_time_start(update, context):
+    q = update.callback_query; await q.answer()
+    context.user_data["setting_time_type"] = "evening"
+    await q.edit_message_text(
+        "🌆 اكتب وقت التقرير المسائي بصيغة *HH:MM*\nمثال: 21:00",
+        parse_mode="Markdown"
+    )
+    return SET_EVENING_TIME
+
+async def save_notif_time(update, context):
+    uid  = update.effective_user.id
+    text = update.message.text.strip()
+    ttype = context.user_data.get("setting_time_type", "morning")
+    try:
+        h, m = map(int, text.split(":")); assert 0 <= h <= 23 and 0 <= m <= 59
+    except Exception:
+        await update.message.reply_text("❌ صيغة خاطئة، مثال: 09:00"); 
+        return SET_MORNING_TIME if ttype == "morning" else SET_EVENING_TIME
+    key = "morning_time" if ttype == "morning" else "evening_time"
+    s = (get_user(uid) or {}).get("settings", {})
+    s[key] = text
+    update_user(uid, {"settings": s})
+    emoji = "☀️" if ttype == "morning" else "🌆"
+    await update.message.reply_text(
+        f"{emoji} تم الضبط! سيصلك التنبيه الساعة *{text}* يومياً.",
+        parse_mode="Markdown", reply_markup=main_menu_keyboard()
+    )
+    return ConversationHandler.END
 
 
 # ════════════════════════════════════════════════════════════
 #  SCHEDULED JOBS
 # ════════════════════════════════════════════════════════════
+async def job_check_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """يعمل كل 5 دقائق — يرسل التذكيرات المستحقة."""
+    due = get_due_reminders()
+    for r in due:
+        try:
+            await context.bot.send_message(
+                r["user_id"],
+                f"⏰ *تذكير!*\n\n📋 {r['task_title']}\n\n_لا تنسَ إنجاز مهمتك!_",
+                parse_mode="Markdown"
+            )
+            mark_reminder_fired(str(r["_id"]))
+        except Exception as e:
+            logger.warning(f"reminder {r['_id']}: {e}")
+
 async def job_midnight(context: ContextTypes.DEFAULT_TYPE):
     for user in get_all_users():
         uid = user["user_id"]
@@ -1402,18 +1554,37 @@ def main():
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("backup",  cmd_backup))
     
-    for h in [task_conv, edit_task_conv, habit_conv, goal_conv,
-              goal_update_conv, challenge_conv, friend_conv, ai_conv]:
+    reminder_conv = conv(
+        [("^remind_task_", remind_task_start)],
+        {REMINDER_TIME: [
+            CallbackQueryHandler(remind_task_quick,  pattern="^rtime_(30m|1h|2h|3h)$"),
+            CallbackQueryHandler(remind_task_custom, pattern="^rtime_custom$"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, remind_task_time_text),
+        ]},
+    )
+    morning_time_conv = conv(
+        [("^set_morning_time$", set_morning_time_start)],
+        {SET_MORNING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_notif_time)]},
+    )
+    evening_time_conv = conv(
+        [("^set_evening_time$", set_evening_time_start)],
+        {SET_EVENING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_notif_time)]},
+    )
+
+    for h in [task_conv, edit_task_conv, habit_conv, goal_conv, goal_update_conv,
+              challenge_conv, friend_conv, ai_conv,
+              reminder_conv, morning_time_conv, evening_time_conv]:
         app.add_handler(h)
-        
+
     app.add_handler(CallbackQueryHandler(cb_router))
 
     # التنبيهات التلقائية
     jq = app.job_queue
     if jq:
-        jq.run_daily(job_midnight,      time=time(21, 0, 0))
-        jq.run_daily(job_morning,       time=time(9,  0, 0))
-        jq.run_daily(job_weekly_bonus,  time=time(20, 0, 0), days=(6,))
+        jq.run_daily(job_midnight,          time=time(21, 0, 0))
+        jq.run_daily(job_morning,           time=time(9,  0, 0))
+        jq.run_daily(job_weekly_bonus,      time=time(20, 0, 0), days=(6,))
+        jq.run_repeating(job_check_reminders, interval=300, first=10)  # كل 5 دقائق
 
     logger.info("🚀 البوت شغال الآن بنجاح!")
     app.run_polling(drop_pending_updates=True)

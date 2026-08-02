@@ -245,6 +245,42 @@ def get_user_goals(user_id: int, status: str = "active") -> list:
     return list(get_db().goals.find(q).sort("created_at", DESCENDING))
 
 
+# ════════════════════════ REMINDERS ══════════════════════════
+def create_reminder(user_id: int, task_id: str, task_title: str, fire_at: datetime) -> str:
+    doc = {
+        "user_id":    user_id,
+        "task_id":    task_id,
+        "task_title": task_title,
+        "fire_at":    fire_at,
+        "fired":      False,
+        "created_at": datetime.utcnow(),
+    }
+    r = get_db().reminders.insert_one(doc)
+    return str(r.inserted_id)
+
+def get_due_reminders() -> list:
+    return list(get_db().reminders.find({
+        "fired": False,
+        "fire_at": {"$lte": datetime.utcnow()}
+    }))
+
+def mark_reminder_fired(reminder_id: str):
+    get_db().reminders.update_one(
+        {"_id": ObjectId(reminder_id)},
+        {"$set": {"fired": True}}
+    )
+
+def get_user_reminders(user_id: int) -> list:
+    return list(get_db().reminders.find({
+        "user_id": user_id,
+        "fired":   False,
+        "fire_at": {"$gte": datetime.utcnow()}
+    }).sort("fire_at", ASCENDING))
+
+def delete_user_reminders(user_id: int, task_id: str):
+    get_db().reminders.delete_many({"user_id": user_id, "task_id": task_id, "fired": False})
+
+
 # ════════════════════════ STATS ══════════════════════════════
 def get_daily_stats(user_id: int) -> dict:
     today  = date.today().strftime("%Y-%m-%d")
