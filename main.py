@@ -375,6 +375,11 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s["strict_mode"] = not s.get("strict_mode", False)
         update_user(uid, {"settings": s})
         await _settings_page(update, get_user(uid))
+    elif d == "toggle_harassment":
+        s = user.get("settings", {})
+        s["harassment_mode"] = not s.get("harassment_mode", False)
+        update_user(uid, {"settings": s})
+        await _settings_page(update, get_user(uid))
 
     # ── Backup ───────────────────────────────────────────────
     elif d == "backup_json":
@@ -1332,25 +1337,31 @@ async def my_reminders_page(update, uid):
 # ════════════════════════════════════════════════════════════
 async def _settings_page(update, user):
     s      = user.get("settings",{})
-    n      = "✅" if s.get("notifications",True)   else "❌"
+    n      = "✅" if s.get("notifications",True)    else "❌"
     r      = "✅" if s.get("midnight_report",True)  else "❌"
     st     = "✅" if s.get("strict_mode",False)     else "❌"
+    hm     = "🔴 شغّال" if s.get("harassment_mode",False) else "⚫ مطفي"
     mt     = s.get("morning_time", "09:00")
     et     = s.get("evening_time", "21:00")
-    txt    = (f"⚙️ *الإعدادات*\n\n"
-              f"🔔 التنبيهات الصباحية: {n}  _(الساعة {mt})_\n"
-              f"🌙 التقرير الليلي: {r}  _(الساعة {et})_\n"
-              f"⚔️ الوضع الصارم (خسارة السلسلة): {st}\n")
+    txt    = (
+        f"⚙️ *الإعدادات*\n\n"
+        f"🔔 التنبيهات الصباحية: {n}  _(الساعة {mt})_\n"
+        f"🌙 التقرير الليلي: {r}  _(الساعة {et})_\n"
+        f"⚔️ الوضع الصارم: {st}\n"
+        f"😤 وضع الإزعاج: {hm}\n"
+        f"_{'كل 30 دقيقة يذكرك بمهامك قسراً!' if s.get('harassment_mode') else 'تذكيرات قسرية كل 30 دقيقة'}_\n"
+    )
     kb     = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🔔 التنبيهات: {n}",           callback_data="toggle_notif")],
-        [InlineKeyboardButton(f"☀️ وقت الصباح: {mt}",         callback_data="set_morning_time")],
-        [InlineKeyboardButton(f"🌙 التقرير الليلي: {r}",       callback_data="toggle_report")],
-        [InlineKeyboardButton(f"🌆 وقت المساء: {et}",          callback_data="set_evening_time")],
-        [InlineKeyboardButton(f"⚔️ الوضع الصارم: {st}",       callback_data="toggle_strict")],
-        [InlineKeyboardButton("⏰ تذكيراتي",                   callback_data="my_reminders")],
-        [InlineKeyboardButton("📦 نسخة احتياطية JSON",         callback_data="backup_json")],
-        [InlineKeyboardButton("📋 تقرير نصي",                  callback_data="backup_report")],
-        [InlineKeyboardButton("🔙 القائمة الرئيسية",           callback_data="back_main")],
+        [InlineKeyboardButton(f"🔔 التنبيهات: {n}",            callback_data="toggle_notif")],
+        [InlineKeyboardButton(f"☀️ وقت الصباح: {mt}",          callback_data="set_morning_time")],
+        [InlineKeyboardButton(f"🌙 التقرير الليلي: {r}",        callback_data="toggle_report")],
+        [InlineKeyboardButton(f"🌆 وقت المساء: {et}",           callback_data="set_evening_time")],
+        [InlineKeyboardButton(f"⚔️ الوضع الصارم: {st}",        callback_data="toggle_strict")],
+        [InlineKeyboardButton(f"😤 وضع الإزعاج: {hm}",         callback_data="toggle_harassment")],
+        [InlineKeyboardButton("⏰ تذكيراتي",                    callback_data="my_reminders")],
+        [InlineKeyboardButton("📦 نسخة احتياطية JSON",          callback_data="backup_json")],
+        [InlineKeyboardButton("📋 تقرير نصي",                   callback_data="backup_report")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية",            callback_data="back_main")],
     ])
     await _edit(update, txt, kb)
 
@@ -1501,6 +1512,35 @@ async def job_morning(context: ContextTypes.DEFAULT_TYPE):
                 ]]))
         except Exception: pass
 
+
+async def job_harassment(context: ContextTypes.DEFAULT_TYPE):
+    """كل 30 دقيقة — يزعج المستخدم إذا فعّل وضع الإزعاج."""
+    import random
+    msgs = [
+        "😤 *ليش لسه ما خلصت مهمتك؟!*\nالنظام ما يقبل التقصير!",
+        "🔔 *هيه! المهام بعدها ناقصة!*\nلا تخلي النظام يزعل منك.",
+        "😡 *تجاهل المهام = خسارة XP!*\nاشتغل الحين قبل فوات الأوان.",
+        "💀 *النظام يراقبك...*\nالمهام ما تخلص لوحدها يا صياد!",
+        "⚠️ *تنبيه! تنبيه! تنبيه!*\nعندك مهام ناقصة — الحين!",
+        "🗡️ *صياد بدون مهام = صفر قيمة!*\nقوم خلّص مهامك الحين!",
+        "😒 *ثاني مرة أذكّرك...*\nراح أكمل أذكّرك كل شوي لحد ما تخلص!",
+    ]
+    for user in get_all_users():
+        if not user.get("settings",{}).get("harassment_mode", False): continue
+        try:
+            uid   = user["user_id"]
+            stats = get_daily_stats(uid)
+            if stats["tasks_pending"] == 0: continue   # خلص كل شيء ✅
+            msg = random.choice(msgs)
+            await context.bot.send_message(
+                uid,
+                f"{msg}\n\n📋 *{stats['tasks_pending']}* مهمة لا تزال ناقصة!",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⚡ أنجز الآن!", callback_data="task_today")
+                ]])
+            )
+        except Exception: pass
 
 async def job_noon_warning(context: ContextTypes.DEFAULT_TYPE):
     """تحذير الظهيرة — للصيادين المتأخرين."""
@@ -1722,6 +1762,7 @@ def main():
     # التنبيهات التلقائية
     jq = app.job_queue
     if jq:
+        jq.run_repeating(job_harassment,      interval=1800, first=60) # كل 30 دقيقة
         jq.run_daily(job_morning,             time=time(9,  0, 0))   # الصباح — Daily Quest
         jq.run_daily(job_noon_warning,        time=time(12, 0, 0))   # الظهيرة — تحذير
         jq.run_daily(job_evening_warning,     time=time(19, 0, 0))   # المساء — تحذير أخير
