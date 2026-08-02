@@ -352,6 +352,10 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _friends_page(update, uid)
 
     # ── Settings ─────────────────────────────────────────────
+    elif d.startswith("rdone_"):
+        await _complete_task_cb(update, uid, d[len("rdone_"):])
+    elif d == "reminder_skip":
+        await q.answer("حسناً! سنذكّرك لاحقاً 💪", show_alert=True)
     elif d.startswith("remind_task_"):
         return await remind_task_start(update, context)
     elif d == "my_reminders":
@@ -466,13 +470,43 @@ async def _task_detail(update, task_id):
     await update.callback_query.edit_message_text(txt, parse_mode="Markdown",
                                                    reply_markup=InlineKeyboardMarkup(rows))
 
+def _create_next_repeat(task: dict, uid: int):
+    """ينشئ نسخة التالية من المهمة المتكررة."""
+    from datetime import timedelta
+    repeat = task.get("repeat_type", "once")
+    if repeat == "once" or not task.get("due_date"): return
+    try:
+        old_date = date.fromisoformat(task["due_date"])
+        if repeat == "daily":   new_date = old_date + timedelta(days=1)
+        elif repeat == "weekly": new_date = old_date + timedelta(weeks=1)
+        elif repeat == "monthly":
+            m = old_date.month % 12 + 1
+            y = old_date.year + (1 if old_date.month == 12 else 0)
+            new_date = old_date.replace(year=y, month=m)
+        else: return
+        data = {k: task[k] for k in
+                ["title","priority","category","notes","repeat_type","start_time","end_time"]
+                if k in task}
+        data["due_date"] = new_date.strftime("%Y-%m-%d")
+        create_task(uid, data)
+    except Exception as e:
+        logger.warning(f"repeat task error: {e}")
+
 async def _complete_task_cb(update, uid, task_id):
     task   = complete_task(task_id)
     if not task:
-        await update.callback_query.answer("المهمة غير موجودة!", show_alert=True); return
+        if update.callback_query:
+            await update.callback_query.answer("المهمة غير موجودة!", show_alert=True)
+        return
     result = award_task_completion(uid, task.get("priority","medium"))
     update_challenge_progress(uid, "tasks")
     new_ach = check_and_award(uid)
+
+    # أنشئ التكرار التالي تلقائياً
+    _create_next_repeat(task, uid)
+    repeat_lbl = {"daily":"📅 تكررت غداً","weekly":"📅 تكررت الأسبوع القادم",
+                  "monthly":"📅 تكررت الشهر القادم"}.get(task.get("repeat_type","once"),"")
+
     txt = (
         f"✅ *مهمة مكتملة!*\n\n📋 {task['title']}\n\n"
         f"⭐ +{result['xp_gained']} XP  |  💰 +{result['coins_gained']} عملة\n"
@@ -480,11 +514,17 @@ async def _complete_task_cb(update, uid, task_id):
     )
     if result["leveled_up"]:
         txt += f"\n\n🎊 *ترقية!* → {result['new_rank_emoji']} *{result['new_rank']}*"
-    await update.callback_query.edit_message_text(txt, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 مهام اليوم", callback_data="task_today")],
-            [InlineKeyboardButton("🏠 القائمة",    callback_data="back_main")],
-        ]))
+    if repeat_lbl:
+        txt += f"\n\n🔄 _{repeat_lbl} تلقائياً_"
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 مهام اليوم", callback_data="task_today")],
+        [InlineKeyboardButton("🏠 القائمة",    callback_data="back_main")],
+    ])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(txt, parse_mode="Markdown", reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(txt, parse_mode="Markdown", reply_markup=kb)
     await _ach_popups(update, new_ach)
 
 async def _edit_task_menu(update, context, task_id):
@@ -1357,14 +1397,18 @@ async def save_notif_time(update, context):
 #  SCHEDULED JOBS
 # ════════════════════════════════════════════════════════════
 async def job_check_reminders(context: ContextTypes.DEFAULT_TYPE):
-    """يعمل كل 5 دقائق — يرسل التذكيرات المستحقة."""
+    """يعمل كل 5 دقائق — يرسل التذكيرات المستحقة مع أزرار الإنجاز."""
     due = get_due_reminders()
     for r in due:
         try:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ أنجزتها!", callback_data=f"rdone_{r['task_id']}"),
+                 InlineKeyboardButton("⏭️ لاحقاً",  callback_data="reminder_skip")],
+            ])
             await context.bot.send_message(
                 r["user_id"],
-                f"⏰ *تذكير!*\n\n📋 {r['task_title']}\n\n_لا تنسَ إنجاز مهمتك!_",
-                parse_mode="Markdown"
+                f"⏰ *تذكير!*\n\n📋 *{r['task_title']}*\n\n_هل أنجزت هذه المهمة؟_",
+                parse_mode="Markdown", reply_markup=kb
             )
             mark_reminder_fired(str(r["_id"]))
         except Exception as e:
