@@ -1397,17 +1397,20 @@ async def save_notif_time(update, context):
 #  SCHEDULED JOBS
 # ════════════════════════════════════════════════════════════
 async def job_check_reminders(context: ContextTypes.DEFAULT_TYPE):
-    """يعمل كل 5 دقائق — يرسل التذكيرات المستحقة مع أزرار الإنجاز."""
+    """يعمل كل 5 دقائق — يرسل التذكيرات بأسلوب Solo Leveling."""
     due = get_due_reminders()
     for r in due:
         try:
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ أنجزتها!", callback_data=f"rdone_{r['task_id']}"),
-                 InlineKeyboardButton("⏭️ لاحقاً",  callback_data="reminder_skip")],
+                [InlineKeyboardButton("✅ تم الإنجاز!", callback_data=f"rdone_{r['task_id']}"),
+                 InlineKeyboardButton("⏭️ لاحقاً",     callback_data="reminder_skip")],
             ])
             await context.bot.send_message(
                 r["user_id"],
-                f"⏰ *تذكير!*\n\n📋 *{r['task_title']}*\n\n_هل أنجزت هذه المهمة؟_",
+                f"⚠️ *تنبيه من النظام*\n{'═'*20}\n\n"
+                f"📋 *{r['task_title']}*\n\n"
+                f"_النظام يراقبك يا صياد..._\n"
+                f"_هل أنجزت مهمتك؟_",
                 parse_mode="Markdown", reply_markup=kb
             )
             mark_reminder_fired(str(r["_id"]))
@@ -1415,6 +1418,7 @@ async def job_check_reminders(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"reminder {r['_id']}: {e}")
 
 async def job_midnight(context: ContextTypes.DEFAULT_TYPE):
+    """تقرير منتصف الليل — Solo Leveling style."""
     for user in get_all_users():
         uid = user["user_id"]
         if not user.get("settings",{}).get("midnight_report",True): continue
@@ -1425,44 +1429,137 @@ async def job_midnight(context: ContextTypes.DEFAULT_TYPE):
             xp    = user.get("xp",0)
             lv    = get_level_info(xp)
             rate  = stats["completion_rate"]
-            em    = "🟢" if rate>=80 else "🟡" if rate>=50 else "🔴"
-            # XP gained today (estimate)
-            today_xp   = stats["tasks_done"] * 20
+            today_xp    = stats["tasks_done"] * 20
             today_coins = stats["tasks_done"] * 10
+
+            if rate >= 100:
+                header = "🏆 *إنجاز مطلق — اليوم ملكٌ لك!*"
+                footer = "_الصيادون الحقيقيون لا يتوقفون. غداً أقوى!_ ⚔️"
+            elif rate >= 80:
+                header = "✅ *أداء ممتاز — النظام راضٍ عنك*"
+                footer = "_واصل المسار يا صياد. القمة قريبة!_ 💪"
+            elif rate >= 50:
+                header = "⚠️ *أداء متوسط — النظام يحذّرك*"
+                footer = "_الضعف ليس خياراً. غداً لا عذر!_ 🔥"
+            else:
+                header = "💀 *فشل ذريع — النظام غاضب*"
+                footer = "_هذا المستوى لا يُقبل. الصيادون لا يستسلمون!_ ⚠️"
+
             txt = (
-                f"🌙 *تقرير نهاية اليوم*\n{'─'*24}\n\n"
-                f"{em} الإنجاز: *{rate}%*\n"
+                f"{header}\n{'═'*24}\n\n"
+                f"📊 نسبة الإنجاز: *{rate}%*\n"
                 f"✅ المهام: *{stats['tasks_done']}/{stats['tasks_total']}*\n"
                 f"🔥 العادات: *{stats['habits_done']}/{stats['habits_total']}*\n"
                 f"🏅 السلسلة: *{user.get('streak',0)}* يوم\n"
-                f"⭐ XP المكتسب اليوم: *+{today_xp}*\n"
-                f"💰 العملات المكتسبة: *+{today_coins}*\n"
+                f"⭐ XP اليوم: *+{today_xp}*\n"
+                f"💰 العملات: *+{today_coins}*\n"
             )
-            if pen.get("tasks_missed",0):
-                txt += (f"\n❌ *خصم التأجيل:*\n"
-                        f"   -{pen['xp_lost']} XP  |  -{pen['coins_lost']} عملة\n"
-                        f"   ({pen['tasks_missed']} مهام لم تُنجز)\n")
+            if pen.get("tasks_missed", 0):
+                txt += (
+                    f"\n💀 *عقوبة النظام:*\n"
+                    f"   ⬇️ -{pen['xp_lost']} XP  |  -{pen['coins_lost']} عملة\n"
+                    f"   ({pen['tasks_missed']} مهام تجاهلتَها)\n"
+                )
             if pen.get("streak_lost"):
-                txt += "💔 *انقطعت السلسلة!* ابدأ من جديد غداً.\n"
-            txt += f"\n{lv['rank_emoji']} الرتبة: *{lv['rank']}*\n_واصل الإنجاز غداً!_ 💪"
+                txt += "\n💔 *انقطعت سلسلتك! النظام لا يرحم الضعفاء.*\n"
+            txt += f"\n{lv['rank_emoji']} رتبتك: *{lv['rank']}*\n\n{footer}"
             await context.bot.send_message(uid, txt, parse_mode="Markdown")
         except Exception as e:
             logger.warning(f"midnight report {uid}: {e}")
 
+
 async def job_morning(context: ContextTypes.DEFAULT_TYPE):
+    """تنبيه الصباح — Solo Leveling: Daily Quest received!"""
     for user in get_all_users():
         if not user.get("settings",{}).get("notifications",True): continue
         try:
-            stats = get_daily_stats(user["user_id"])
+            uid   = user["user_id"]
+            stats = get_daily_stats(uid)
+            tasks = get_today_tasks(uid)
             if stats["tasks_total"] == 0: continue
-            await context.bot.send_message(
-                user["user_id"],
-                f"☀️ *صباح الخير {user['name']}!*\n\n"
-                f"📋 لديك *{stats['tasks_pending']}* مهمة اليوم\n"
-                f"🔥 سلسلتك: *{user.get('streak',0)}* يوم\n\n"
-                f"_انطلق الآن!_ ⚡",
-                parse_mode="Markdown"
+            lv  = get_level_info(user.get("xp",0))
+            pi  = {"low":"🟢","medium":"🟡","high":"🟠","urgent":"🔴"}
+            task_list = "\n".join(
+                f"  {pi.get(t['priority'],'⚪')} {t['title'][:35]}"
+                for t in tasks[:5]
             )
+            streak = user.get("streak",0)
+            streak_warn = f"\n⚠️ _سلسلتك {streak} يوم — لا تكسرها!_" if streak > 0 else ""
+            txt = (
+                f"⚔️ *تنبيه من النظام*\n{'═'*22}\n\n"
+                f"🌅 صياد {lv['rank_emoji']} *{user['name']}*\n"
+                f"مهامك اليومية جاهزة!\n\n"
+                f"📋 *المهام اليوم ({stats['tasks_total']}):*\n"
+                f"{task_list}\n"
+                f"{'  ...' if stats['tasks_total']>5 else ''}\n"
+                f"{streak_warn}\n\n"
+                f"_النظام يراقبك. أثبت قيمتك يا صياد!_ ⚡"
+            )
+            await context.bot.send_message(uid, txt, parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📋 ابدأ المهام", callback_data="task_today")
+                ]]))
+        except Exception: pass
+
+
+async def job_noon_warning(context: ContextTypes.DEFAULT_TYPE):
+    """تحذير الظهيرة — للصيادين المتأخرين."""
+    for user in get_all_users():
+        if not user.get("settings",{}).get("notifications",True): continue
+        try:
+            uid   = user["user_id"]
+            stats = get_daily_stats(uid)
+            if stats["tasks_total"] == 0: continue
+            pending = stats["tasks_pending"]
+            if pending == 0: continue   # أنجز كل شيء، لا داعي للتحذير
+            rate = stats["completion_rate"]
+            txt = (
+                f"🕛 *تحذير الظهيرة*\n{'═'*20}\n\n"
+                f"⚠️ النهار نصفه مضى!\n\n"
+                f"📋 لا يزال لديك *{pending}* مهمة معلّقة\n"
+                f"📊 إنجازك حتى الآن: *{rate}%*\n\n"
+                f"_الوقت يتسارع يا صياد.\nالنظام لن يرحم المتكاسلين!_ ⏳"
+            )
+            await context.bot.send_message(uid, txt, parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⚡ أنجز الآن!", callback_data="task_today")
+                ]]))
+        except Exception: pass
+
+
+async def job_evening_warning(context: ContextTypes.DEFAULT_TYPE):
+    """التحذير الأخير — قبل ساعتين من العقوبة."""
+    for user in get_all_users():
+        if not user.get("settings",{}).get("midnight_report",True): continue
+        try:
+            uid   = user["user_id"]
+            stats = get_daily_stats(uid)
+            if stats["tasks_total"] == 0: continue
+            pending = stats["tasks_pending"]
+            if pending == 0: continue
+            lv = get_level_info(user.get("xp",0))
+            # احسب العقوبة المتوقعة
+            from modules.database import get_db as _gdb
+            today = date.today().strftime("%Y-%m-%d")
+            pending_tasks = list(_gdb().tasks.find(
+                {"user_id": uid, "due_date": today, "status": "pending"}
+            ))
+            expected_xp_loss = sum(
+                {"low":5,"medium":10,"high":20,"urgent":35}.get(t.get("priority","medium"),10)
+                for t in pending_tasks
+            )
+            txt = (
+                f"🚨 *تحذير أخير من النظام*\n{'═'*22}\n\n"
+                f"⏰ تبقّى ساعتان قبل العقوبة!\n\n"
+                f"📋 المهام المتبقية: *{pending}*\n"
+                f"💀 XP ستخسره: *-{expected_xp_loss}*\n"
+                f"🏅 رتبتك الحالية: {lv['rank_emoji']} *{lv['rank']}*\n\n"
+                f"_آخر فرصة يا صياد!\nالنظام لا يمنح فرصاً ثانية!_ ⚠️"
+            )
+            await context.bot.send_message(uid, txt, parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔥 أنجز قبل فوات الأوان!", callback_data="task_today")
+                ]]))
         except Exception: pass
 
 async def job_weekly_bonus(context: ContextTypes.DEFAULT_TYPE):
@@ -1625,9 +1722,11 @@ def main():
     # التنبيهات التلقائية
     jq = app.job_queue
     if jq:
-        jq.run_daily(job_midnight,          time=time(21, 0, 0))
-        jq.run_daily(job_morning,           time=time(9,  0, 0))
-        jq.run_daily(job_weekly_bonus,      time=time(20, 0, 0), days=(6,))
+        jq.run_daily(job_morning,             time=time(9,  0, 0))   # الصباح — Daily Quest
+        jq.run_daily(job_noon_warning,        time=time(12, 0, 0))   # الظهيرة — تحذير
+        jq.run_daily(job_evening_warning,     time=time(19, 0, 0))   # المساء — تحذير أخير
+        jq.run_daily(job_midnight,            time=time(21, 0, 0))   # الليل — العقوبة
+        jq.run_daily(job_weekly_bonus,        time=time(20, 0, 0), days=(6,))
         jq.run_repeating(job_check_reminders, interval=300, first=10)  # كل 5 دقائق
 
     logger.info("🚀 البوت شغال الآن بنجاح!")
