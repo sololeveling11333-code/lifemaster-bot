@@ -3,6 +3,7 @@ LifeMaster AI — Telegram Bot (Full)
 مهام · عادات · أهداف · XP · متجر · تحليلات · تقويم · تحديات · ذكاء اصطناعي
 """
 import os
+import re
 import logging
 import io
 from flask import Flask
@@ -22,7 +23,10 @@ Thread(target=run).start()
 
 from datetime import datetime, time, date, timedelta
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, ContextTypes, ConversationHandler, filters,
@@ -114,6 +118,42 @@ async def _edit(update: Update, text: str, kb, parse_mode="Markdown"):
     else:
         await update.message.reply_text(text, parse_mode=parse_mode, reply_markup=kb)
 
+# ── Reply (persistent bottom) Main Menu Keyboard ───────────────
+# نفس نصوص وإيموجيات القائمة الرئيسية بالضبط، بس كيبورد ثابت أسفل الشاشة
+MAIN_MENU_LABELS = [
+    ["📅 مهام اليوم",     "🔥 العادات"],
+    ["🎯 أهدافي",         "📊 تحليلاتي"],
+    ["🤖 المدرب الذكي",   "🏆 الإنجازات"],
+    ["🛒 المتجر",         "👥 الترتيب"],
+    ["👤 ملفي",           "⚙️ الإعدادات"],
+]
+
+def main_reply_keyboard():
+    rows = [[KeyboardButton(t) for t in row] for row in MAIN_MENU_LABELS]
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+
+async def _route_main_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """يوجّه نص زر الكيبورد الثابت لنفس شاشة القائمة الرئيسية المقابلة. يرجع True لو تعامل معها."""
+    uid  = update.effective_user.id
+    user = get_or_create_user(uid, update.effective_user.first_name)
+    if   text == "📅 مهام اليوم":   await _today_tasks(update, uid)
+    elif text == "🔥 العادات":      await _habits_menu(update)
+    elif text == "🎯 أهدافي":       await _goals_menu(update, uid)
+    elif text == "📊 تحليلاتي":     await _analytics_menu(update)
+    elif text == "🤖 المدرب الذكي": await _ai_menu(update, user)
+    elif text == "🏆 الإنجازات":    await _achievements_page(update, uid)
+    elif text == "🛒 المتجر":       await _store_main(update)
+    elif text == "👥 الترتيب":      await _leaderboard(update, uid)
+    elif text == "👤 ملفي":         await _show_profile(update, user)
+    elif text == "⚙️ الإعدادات":    await _settings_page(update, user)
+    else:
+        return False
+    return True
+
+async def main_reply_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نقطة الدخول لـ MessageHandler الخاص بأزرار الكيبورد الثابت أسفل الشاشة."""
+    await _route_main_reply(update, context, update.message.text)
+
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict):
     xp  = user.get("xp", 0)
     lv  = get_level_info(xp)
@@ -128,7 +168,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, use
         f"💰 {user.get('coins',0):,} عملة  |  🔥 {user.get('streak',0)} يوم\n\n"
         f"اختر من القائمة:"
     )
-    await _edit(update, txt, main_menu_keyboard())
+    # ReplyKeyboardMarkup ما يقدر ينرسل مع تعديل رسالة قديمة — نرسله كرسالة جديدة دائماً
+    await update.effective_message.reply_text(txt, parse_mode="Markdown", reply_markup=main_reply_keyboard())
 
 async def _ach_popups(update: Update, ach_list: list):
     for a in ach_list:
@@ -159,7 +200,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🛒 افتح صناديق وتسوّق\n"
             "👥 تحدَّ أصدقاءك\n\n"
             "ابدأ الآن! 👇",
-            parse_mode="Markdown", reply_markup=main_menu_keyboard()
+            parse_mode="Markdown", reply_markup=main_reply_keyboard()
         )
     else:
         await show_main_menu(update, context, user)
@@ -1540,6 +1581,12 @@ def main():
     for h in [task_conv, edit_task_conv, habit_conv, goal_conv, goal_update_conv,
               challenge_conv, friend_conv, ai_conv]:
         app.add_handler(h)
+
+    # كيبورد القائمة الرئيسية الثابت أسفل الشاشة — نص كل زر يوجّه لنفس شاشة الـ Inline المقابلة
+    _main_reply_pattern = "^(" + "|".join(
+        re.escape(t) for row in MAIN_MENU_LABELS for t in row
+    ) + ")$"
+    app.add_handler(MessageHandler(filters.Regex(_main_reply_pattern), main_reply_router))
 
     app.add_handler(CallbackQueryHandler(cb_router))
 
